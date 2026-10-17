@@ -24,8 +24,16 @@ pub fn try_read_exif(bytes: &[u8]) -> Result<Metadata, TiffError> {
         m.lens_model = panasonic_maker_note_lens(data, &tiff);
     }
     // the maker note's values are offsets into the stream, which `from_tiff` doesn't have
+    m.film_mode = fuji_film_mode(&tiff, data, m.make.as_deref());
     m.focus = crate::focus::read(data, &tiff, m.make.as_deref(), m.model.as_deref(), m.orientation);
     Ok(m)
+}
+
+/// Fujifilm maker-note `FilmMode` (0x1401), which names the film simulation of the shot.
+fn fuji_film_mode(tiff: &Tiff, bytes: &[u8], make: Option<&str>) -> Option<u16> {
+    let make = make.filter(|m| m.to_ascii_uppercase().starts_with("FUJIFILM"))?;
+    let e = tiff.exif()?.get(t::MAKER_NOTE)?;
+    lightcraft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, make)?.ifd.u16(0x1401)
 }
 
 fn text(ifd: Option<&Ifd>, tag: u16) -> Option<String> {
@@ -517,5 +525,48 @@ mod write_tests {
         assert_eq!(back.lens_model, m.lens_model);
         let g = back.gps.unwrap();
         assert!((g.latitude - 43.7904).abs() < 1e-5 && (g.longitude + 110.6818).abs() < 1e-5, "{g:?}");
+    }
+}
+
+#[cfg(test)]
+mod film_mode_tests {
+    use super::*;
+
+    fn entry(tag: u16, ty: u16, count: u32, value: u32) -> Vec<u8> {
+        [tag.to_le_bytes().to_vec(), ty.to_le_bytes().to_vec(), count.to_le_bytes().to_vec(), value.to_le_bytes().to_vec()].concat()
+    }
+
+    /// A little-endian TIFF: Make, and an Exif IFD whose maker note is a Fujifilm note holding FilmMode.
+    fn fuji(make: &[u8], film_mode: u16) -> Vec<u8> {
+        let note =
+            [b"FUJIFILM".to_vec(), 12u32.to_le_bytes().to_vec(), 1u16.to_le_bytes().to_vec(), entry(0x1401, 3, 1, film_mode as u32), vec![0; 4]]
+                .concat();
+        let mut b = [b"II*\0".to_vec(), 8u32.to_le_bytes().to_vec(), 2u16.to_le_bytes().to_vec()].concat();
+        b.extend(entry(0x010f, 2, make.len() as u32, 38));
+        b.extend(entry(0x8769, 4, 1, 48));
+        b.extend([0; 4]);
+        b.extend(make);
+        b.resize(48, 0);
+        b.extend([1u8, 0]);
+        b.extend(entry(0x927c, 7, note.len() as u32, 66));
+        b.extend([0; 4]);
+        b.extend(note);
+        b
+    }
+
+    #[test]
+    fn reads_the_fujifilm_film_simulation() {
+        let m = read_exif(&fuji(b"FUJIFILM\0", 0x200));
+        assert_eq!((m.make.as_deref(), m.film_mode), (Some("FUJIFILM"), Some(0x200)));
+        assert_eq!(read_exif(&fuji(b"Canon\0\0\0\0\0", 0x200)).film_mode, None, "only Fujifilm notes");
+    }
+
+    #[test]
+    fn a_truncated_maker_note_gives_no_film_simulation_and_no_panic() {
+        let b = fuji(b"FUJIFILM\0", 0x200);
+        for n in 0..b.len() {
+            let _ = read_exif(&b[..n]);
+        }
+        assert_eq!(read_exif(&b[..b.len() - 6]).film_mode, None);
     }
 }

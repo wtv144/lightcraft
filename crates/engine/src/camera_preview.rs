@@ -268,7 +268,7 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     let black_and_white = monochrome(&reference);
     // A camera profile pooled from many photos knows colours this photo shows too little of;
     // try its colour first and fit tone/chroma per photo (picture styles vary).
-    let profile = raw.metadata.model.as_deref().and_then(crate::camera_profiles::get);
+    let profile = raw.metadata.model.as_deref().and_then(|m| crate::camera_profiles::for_photo(m, raw.metadata.film_mode));
     let colour = profile.as_ref().and_then(|p| Some((p.matrix().mul(&transform.matrix.inverse()?), p.hue_sat.clone())));
     let look = match fit_look(&sensor, &reference, &clipped, colour.clone()) {
         Some(look) => look,

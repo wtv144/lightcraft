@@ -92,6 +92,8 @@ pub struct Metadata {
     pub lens_serial_number: Option<String>,
     /// Min/max focal length (mm) and min/max f-number at those, as in Exif `LensSpecification`.
     pub lens_spec: Option<[f64; 4]>,
+    /// Fujifilm maker-note `FilmMode` code (the film simulation), read from Exif only.
+    pub film_mode: Option<u16>,
     // capture
     pub capture_time: Option<DateTime>,
     /// Seconds.
@@ -171,6 +173,7 @@ impl Metadata {
             lens_model,
             lens_serial_number,
             lens_spec,
+            film_mode,
             capture_time,
             exposure_time,
             f_number,

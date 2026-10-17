@@ -685,6 +685,8 @@ mod tests {
             // roundtrip fixture must leave this empty or `roundtrip_all_fields` can't round-trip it.
             regions: Vec::new(),
             focus: None,
+            // Exif maker-note only, never in XMP
+            film_mode: None,
             make: Some("Maker & Sons".into()),
             model: Some("X <1>".into()),
             serial_number: Some("SN1".into()),

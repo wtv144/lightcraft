@@ -33,7 +33,33 @@ pub const BUNDLED: &[(&str, &str)] = &[
     ("NIKON Z 8", include_str!("../../../assets/camera-profiles/NIKON_Z_8.json")),
     ("X-H2S", include_str!("../../../assets/camera-profiles/X-H2S.json")),
     ("X-T4", include_str!("../../../assets/camera-profiles/X-T4.json")),
+    ("X-T50", include_str!("../../../assets/camera-profiles/X-T50.json")),
+    ("X-T50 Astia", include_str!("../../../assets/camera-profiles/X-T50_Astia.json")),
+    ("X-T50 Classic Chrome", include_str!("../../../assets/camera-profiles/X-T50_Classic_Chrome.json")),
+    ("X-T50 Nostalgic Neg", include_str!("../../../assets/camera-profiles/X-T50_Nostalgic_Neg.json")),
+    ("X-T50 Provia", include_str!("../../../assets/camera-profiles/X-T50_Provia.json")),
+    ("X-T50 Reala ACE", include_str!("../../../assets/camera-profiles/X-T50_Reala_ACE.json")),
+    ("X-T50 Velvia", include_str!("../../../assets/camera-profiles/X-T50_Velvia.json")),
 ];
+
+/// Fujifilm film simulations by maker-note `FilmMode` code, as seen on X-T50 RAFs. A profile for one is keyed
+/// `<model> <name>`, e.g. `X-T50 Velvia`; other codes use the model's profile.
+// shortcut: only codes verified on real files, add a body's other simulations when calibrating it
+const FILM_MODES: &[(u16, &str)] = &[
+    (0x000, "Provia"),
+    (0x120, "Astia"),
+    (0x200, "Velvia"),
+    (0x600, "Classic Chrome"),
+    (0x800, "Classic Negative"),
+    (0xa00, "Nostalgic Neg"),
+    (0xb00, "Reala ACE"),
+];
+
+/// The profile key of a photo's film simulation: `<model> <film simulation>`.
+fn film_key(model: &str, film_mode: Option<u16>) -> Option<String> {
+    let (_, name) = FILM_MODES.iter().find(|(code, _)| Some(*code) == film_mode)?;
+    Some(format!("{} {name}", model.trim()))
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CameraProfile {
@@ -155,6 +181,15 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     profile
 }
 
+/// The profile for a photo: its film simulation's (`X-T50 Velvia`) if there is one, else the model's.
+pub fn for_photo(model: &str, film_mode: Option<u16>) -> Option<Arc<CameraProfile>> {
+    pick(model, film_mode, get)
+}
+
+fn pick<T>(model: &str, film_mode: Option<u16>, get: impl Fn(&str) -> Option<T>) -> Option<T> {
+    film_key(model, film_mode).and_then(|key| get(&key)).or_else(|| get(model))
+}
+
 /// Changes when the profiles folder's contents change (per process): part of the render cache
 /// keys, so thumbnails rendered before a profile existed are not reused after.
 pub fn cache_key() -> u64 {
@@ -205,9 +240,13 @@ impl Pool {
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
         let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
-        let entry = self.models.entry(model.to_owned()).or_default();
-        entry.0 += 1;
-        entry.1.extend(pairs.into_iter().step_by(step));
+        let pairs: Vec<_> = pairs.into_iter().step_by(step).collect();
+        // pooled under the model and under its film simulation, so one run fits both
+        for key in std::iter::once(model.to_owned()).chain(film_key(model, raw.metadata.film_mode)) {
+            let entry = self.models.entry(key).or_default();
+            entry.0 += 1;
+            entry.1.extend_from_slice(&pairs);
+        }
         Ok(Some(model.to_owned()))
     }
 
@@ -300,6 +339,24 @@ mod tests {
         assert_eq!(file_name(" DSC-RX100M3 "), "DSC-RX100M3.json");
         assert_eq!(file_name("../../etc/passwd"), "______etc_passwd.json");
         assert_eq!(file_name("Ω 1/2"), "__1_2.json");
+    }
+
+    #[test]
+    fn film_simulations_key_their_own_profile() {
+        assert_eq!(film_key(" X-T50 ", Some(0x200)).as_deref(), Some("X-T50 Velvia"));
+        assert_eq!(film_key("X-T50", Some(0xb00)).as_deref(), Some("X-T50 Reala ACE"));
+        assert_eq!(film_key("X-T50", Some(0xdead)), None, "an unknown code uses the model's profile");
+        assert_eq!(film_key("X-T50", None), None);
+        assert_eq!(file_name("X-T50 Classic Chrome"), "X-T50_Classic_Chrome.json");
+    }
+
+    #[test]
+    fn a_film_simulation_profile_wins_over_the_model_profile() {
+        let have = |k: &str| ["ZZ-1", "ZZ-1 Velvia"].contains(&k).then(|| k.to_owned());
+        assert_eq!(pick("ZZ-1", Some(0x200), have).as_deref(), Some("ZZ-1 Velvia"));
+        assert_eq!(pick("ZZ-1", Some(0x000), have).as_deref(), Some("ZZ-1"), "no Provia profile: the model's");
+        assert_eq!(pick("ZZ-1", None, have).as_deref(), Some("ZZ-1"));
+        assert_eq!(pick("ZZ-2", Some(0x200), have), None);
     }
 
     #[test]
